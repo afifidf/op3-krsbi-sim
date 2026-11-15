@@ -1,0 +1,56 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/robotstadium/protos/RobotstadiumSoccerField.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/RobocupSoccerBall.proto"
+EXTERNPROTO "__OP3_PROTO__"
+
+# Lapangan 9 x 6 m (ukuran KidSize/SPL), gawang di x = +-4.5 m.
+# Template: __OP3_PROTO__ diganti path absolut RobotisOp3.proto oleh bringup.launch.py.
+
+WorldInfo {
+  info [
+    "Lapangan sepak bola humanoid untuk simulasi OP3 tim AROC."
+  ]
+  title "KRSBI field"
+  basicTimeStep 8
+}
+Viewpoint {
+  orientation -0.3 0.3 0.9 1.7
+  position -1.0 -4.5 3.0
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RobotstadiumSoccerField {
+}
+DEF BALL RobocupSoccerBall {
+  translation 0.6 0 0.07
+}
+DEF OP3 RobotisOp3 {
+  translation -0.5 0 0.282665
+  name "op3"
+  controller "<extern>"
+  supervisor TRUE
+  cameraWidth 640
+  cameraHeight 480
+  bodySlot [
+    InertialUnit {
+    }
+  ]
+  headSlot [
+    # Penanda pose kamera (translation sama dengan node Camera di proto),
+    # dibaca supervisor ball_tracker untuk proyeksi ground-truth.
+    DEF CAM_REF Pose {
+      translation 0.015348 -0.019 0.04975
+    }
+  ]
+}
+Robot {
+  name "ball_tracker"
+  controller "<extern>"
+  supervisor TRUE
+  synchronization FALSE
+}
