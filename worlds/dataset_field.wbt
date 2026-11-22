@@ -1,0 +1,53 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/robotstadium/protos/RobotstadiumSoccerField.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/RobocupSoccerBall.proto"
+
+# World untuk dataset_gen: lapangan 9 x 6 m, satu bola, dan kamera kinematik dengan
+# lensa yang sama seperti kepala OP3 (fieldOfView 1.3613 rad), rasio 16:9 seperti C920.
+# Tidak ada robot OP3 / framework ROBOTIS; supervisor dataset_gen mengatur semuanya.
+
+WorldInfo {
+  info [
+    "Generator dataset bola untuk YOLO (aroc_sim_bridge dataset_gen)."
+  ]
+  title "dataset field"
+  basicTimeStep 16
+}
+Viewpoint {
+  orientation -0.3 0.3 0.9 1.7
+  position -1.0 -4.5 3.0
+}
+DEF BG TexturedBackground {
+  texture "stadium_dry"
+}
+DEF LIGHT TexturedBackgroundLight {
+  texture "stadium_dry"
+}
+# Lampu biasa (bukan proto) supaya bisa diacak tiap gambar tanpa membangun ulang node.
+DEF SUN DirectionalLight {
+  direction -0.5 -0.3 -1
+  intensity 0.8
+  castShadows TRUE
+}
+RobotstadiumSoccerField {
+}
+DEF BALL RobocupSoccerBall {
+  translation 0.6 0 0.07
+}
+DEF CAMBOT Robot {
+  translation 0 0 0.45
+  name "dataset_camera"
+  controller "<extern>"
+  supervisor TRUE
+  children [
+    DEF CAM Camera {
+      name "camera"
+      fieldOfView 1.3613
+      width 640
+      height 360
+    }
+  ]
+}

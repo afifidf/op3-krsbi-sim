@@ -16,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'launch'),
             glob(os.path.join('launch', '*.launch.py'))),
         (os.path.join('share', package_name, 'worlds'),
-            glob(os.path.join('worlds', '*.wbt.in'))),
+            glob(os.path.join('worlds', '*.wbt*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -30,6 +30,9 @@ setup(
             'imu_yaw_bridge = aroc_sim_bridge.imu_yaw_bridge:main',
             'ball_tracker = aroc_sim_bridge.ball_tracker:main',
             'place_ball = aroc_sim_bridge.place_ball:main',
+            'vision_eval = aroc_sim_bridge.vision_eval:main',
+            'dataset_gen = aroc_sim_bridge.dataset_gen:main',
+            'field_viewer = aroc_sim_bridge.field_viewer:main',
         ],
     },
 )

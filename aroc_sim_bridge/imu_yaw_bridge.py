@@ -17,6 +17,12 @@ op3_extern_controller) lalu:
      rebutan publisher di topic yang sama (lihat bringup.launch.py).
   2. Hitung yaw (derajat, konvensi ENU: 0 saat identity, mengikuti
      orientation quaternion) lalu publish ke /robotis/open_cr/yaw.
+  3. Relay /robotis_op3/joint_states -> /robotis_op3/joint_states_valid tanpa pesan
+     yang berisi NaN. Pesan pertama Webots berisi NaN untuk semua sendi (sensor
+     belum dibaca). robotis_controller menyalin pesan pertama yang ia terima
+     menjadi goal semua sendi, jadi kalau itu pesan NaN, kepala dan lengan
+     tertahan NaN selamanya (tiap modul mulai dari goal lama). op3_manager
+     di-remap ke topic _valid di bringup.launch.py.
 
 Konvensi yaw firmware asli tim belum diketahui pasti (sumbernya ada di
 ~/RobotisSoccerYawNew, tidak tersedia saat bridge ini ditulis). Kalau
@@ -28,7 +34,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Imu
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Float64
 
 
@@ -57,10 +63,23 @@ class ImuYawBridge(Node):
             Imu, '/robotis_op3/imu', self._imu_callback, 10
         )
 
+        self.joint_pub = self.create_publisher(JointState, '/robotis_op3/joint_states_valid', 10)
+        self.create_subscription(
+            JointState, '/robotis_op3/joint_states', self._joint_callback, 10)
+        self.dropped_nan = 0
+
         self.get_logger().info(
             'aroc_sim_imu_yaw_bridge READY '
             '(/robotis_op3/imu -> /robotis/open_cr/imu + /robotis/open_cr/yaw)'
         )
+
+    def _joint_callback(self, msg: JointState):
+        if any(math.isnan(p) for p in msg.position):
+            self.dropped_nan += 1
+            self.get_logger().info(
+                f'joint_states berisi NaN dibuang (total {self.dropped_nan})')
+            return
+        self.joint_pub.publish(msg)
 
     def _imu_callback(self, msg: Imu):
         # 1. Relay IMU asli ke topic yang biasanya diisi nol oleh open_cr_module.

@@ -12,6 +12,18 @@ bisa dites dengan bola yang benar-benar bergerak:
                           relatif badan robot
   - /aroc_sim/ball_position (geometry_msgs/PointStamped) posisi bola di frame lapangan
                           (selalu, terlihat atau tidak) untuk debug dan evaluasi
+  - /aroc_sim/robot_pose (geometry_msgs/PoseStamped) pose robot ground-truth di frame
+                          lapangan (yaw saja), untuk evaluasi lokalisasi
+  - /aroc_sim/ball_pixel (geometry_msgs/PointStamped) piksel bola ground-truth di frame
+                          450x337 (x=cx, y=cy, z=jarak cm), saat bola di dalam FOV,
+                          untuk mengevaluasi detektor YOLO (vision_eval)
+
+Parameter publish_obj_detect=false mematikan /obj_detect supaya YOLO (main_vision)
+yang mengisinya; jarak dan sisi bola tetap dari ground truth.
+
+Kamera robot asli (C920) 1280x720 (16:9) dimampatkan main_vision ke 450x337 (4:3).
+Proyeksi di sini meniru itu: piksel dihitung di resolusi kamera Webots
+(cam_width x cam_height, piksel persegi), lalu diskalakan ke 450x337.
 
 Subscribe (untuk skenario tes, lihat juga CLI place_ball):
   - /aroc_sim/place_ball          (geometry_msgs/Point) pindahkan bola ke x,y lapangan
@@ -27,15 +39,16 @@ karena keduanya menulis ke /vision/hasil_servo.
 """
 
 import math
+import time
 
 import rclpy
 from controller import Supervisor
-from geometry_msgs.msg import Point, PointStamped
+from geometry_msgs.msg import Point, PointStamped, PoseStamped
 from std_msgs.msg import Float32, String
 
 IMG_WIDTH = 450
 IMG_HEIGHT = 337
-CAMERA_FOV = 1.3613  # rad, fieldOfView Camera di RobotisOp3.proto
+CAMERA_FOV = 1.3613  # rad, fieldOfView (horizontal) Camera di RobotisOp3.proto
 
 
 def _to_local(rot, vec):
@@ -57,10 +70,16 @@ class BallTracker:
         node.declare_parameter('max_range', 5.0)
         node.declare_parameter('side_threshold', 0.02)
         node.declare_parameter('ball_timeout', 1.0)
+        node.declare_parameter('cam_width', 640)
+        node.declare_parameter('cam_height', 360)
+        node.declare_parameter('publish_obj_detect', True)
         self.publish_period = node.get_parameter('publish_period').value
         self.max_range = node.get_parameter('max_range').value
         self.side_threshold = node.get_parameter('side_threshold').value
         self.ball_timeout = node.get_parameter('ball_timeout').value
+        self.cam_width = node.get_parameter('cam_width').value
+        self.cam_height = node.get_parameter('cam_height').value
+        self.publish_obj_detect = node.get_parameter('publish_obj_detect').value
 
         self.ball = supervisor.getFromDef('BALL')
         self.op3 = supervisor.getFromDef('OP3')
@@ -68,12 +87,17 @@ class BallTracker:
             raise RuntimeError('World harus punya DEF BALL dan DEF OP3')
         self.cam = self.op3.getField('headSlot').getMFNode(0)
 
-        self.focal = (IMG_WIDTH / 2.0) / math.tan(CAMERA_FOV / 2.0)
+        # Fokus dalam piksel kamera Webots (piksel persegi), lalu skala ke 450x337
+        self.focal = (self.cam_width / 2.0) / math.tan(CAMERA_FOV / 2.0)
+        self.scale_x = IMG_WIDTH / self.cam_width
+        self.scale_y = IMG_HEIGHT / self.cam_height
 
         self.obj_pub = node.create_publisher(String, '/obj_detect', 10)
         self.dist_pub = node.create_publisher(Float32, '/vision/hasil_servo', 10)
         self.side_pub = node.create_publisher(String, '/vision/bola_posisi', 10)
         self.pos_pub = node.create_publisher(PointStamped, '/aroc_sim/ball_position', 10)
+        self.pose_pub = node.create_publisher(PoseStamped, '/aroc_sim/robot_pose', 10)
+        self.pixel_pub = node.create_publisher(PointStamped, '/aroc_sim/ball_pixel', 10)
 
         self.ball_z = self.ball.getPosition()[2]
         self.pending_place = None
@@ -84,6 +108,7 @@ class BallTracker:
         self.last_seen = None
         self.lost_reported = True
         self.next_publish = 0.0
+        self._rtf_mark = None  # (waktu sim, waktu nyata) untuk real-time factor
 
     def _on_place_field(self, msg):
         self.pending_place = ('field', msg.x, msg.y)
@@ -106,23 +131,44 @@ class BallTracker:
         self.lost_reported = True
         self.node.get_logger().info(f'Bola dipindah ke lapangan x={x:.3f} y={y:.3f}')
 
+    def _report_rtf(self, sim_now):
+        """Log kecepatan simulasi tiap 10 s waktu nyata. Di bawah ~0.7x, op3_manager
+        (jalan dengan jam nyata) dan Webots tidak sinkron: gerakan terpotong, tendangan
+        tidak sampai, robot bisa jatuh."""
+        wall = time.monotonic()
+        if self._rtf_mark is None:
+            self._rtf_mark = (sim_now, wall)
+            return
+        sim0, wall0 = self._rtf_mark
+        if wall - wall0 < 10.0:
+            return
+        rtf = (sim_now - sim0) / (wall - wall0)
+        self._rtf_mark = (sim_now, wall)
+        # rclpy melarang satu baris log berganti level, jadi dua pemanggilan terpisah
+        if rtf < 0.7:
+            self.node.get_logger().warning(
+                f'Kecepatan simulasi {rtf:.2f}x waktu nyata (terlalu lambat)')
+        else:
+            self.node.get_logger().info(f'Kecepatan simulasi {rtf:.2f}x waktu nyata')
+
     def _project(self, ball_pos):
         cam_pos = self.cam.getPosition()
         rel = [ball_pos[i] - cam_pos[i] for i in range(3)]
         x, y, z = _to_local(self.cam.getOrientation(), rel)
         if x <= 0.05 or math.sqrt(x * x + y * y + z * z) > self.max_range:
             return None
-        cx = IMG_WIDTH / 2.0 - self.focal * y / x
-        cy = IMG_HEIGHT / 2.0 - self.focal * z / x
+        cx = (self.cam_width / 2.0 - self.focal * y / x) * self.scale_x
+        cy = (self.cam_height / 2.0 - self.focal * z / x) * self.scale_y
         if not (0 <= cx < IMG_WIDTH and 0 <= cy < IMG_HEIGHT):
             return None
-        return int(round(cx)), int(round(cy))
+        return cx, cy
 
     def update(self):
         if self.pending_place is not None:
             self._apply_place()
 
         now = self.sup.getTime()
+        self._report_rtf(now)
         if now < self.next_publish:
             return
         self.next_publish = now + self.publish_period
@@ -133,6 +179,20 @@ class BallTracker:
         pos_msg.header.frame_id = 'field'
         pos_msg.point.x, pos_msg.point.y, pos_msg.point.z = ball_pos
         self.pos_pub.publish(pos_msg)
+
+        # Pose robot ground-truth: untuk evaluasi lokalisasi dan untuk
+        # simulasi detektor landmark (GoNasional sim_landmarks).
+        robot_pos = self.op3.getPosition()
+        rot = self.op3.getOrientation()
+        yaw = math.atan2(rot[3], rot[0])
+        pose_msg = PoseStamped()
+        pose_msg.header = pos_msg.header
+        pose_msg.pose.position.x = robot_pos[0]
+        pose_msg.pose.position.y = robot_pos[1]
+        pose_msg.pose.position.z = robot_pos[2]
+        pose_msg.pose.orientation.z = math.sin(yaw / 2.0)
+        pose_msg.pose.orientation.w = math.cos(yaw / 2.0)
+        self.pose_pub.publish(pose_msg)
 
         pixel = self._project(ball_pos)
 
@@ -157,7 +217,16 @@ class BallTracker:
         else:
             side = 'tengah'
 
-        self.obj_pub.publish(String(data=f'{pixel[0]},{pixel[1]}'))
+        pixel_msg = PointStamped()
+        pixel_msg.header = pos_msg.header
+        pixel_msg.header.frame_id = 'image_450x337'
+        pixel_msg.point.x, pixel_msg.point.y = pixel
+        pixel_msg.point.z = dist_cm
+        self.pixel_pub.publish(pixel_msg)
+
+        if self.publish_obj_detect:
+            self.obj_pub.publish(
+                String(data=f'{int(round(pixel[0]))},{int(round(pixel[1]))}'))
         self.dist_pub.publish(Float32(data=float(dist_cm)))
         self.side_pub.publish(String(data=side))
 

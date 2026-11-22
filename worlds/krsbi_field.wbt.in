@@ -7,7 +7,7 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "__OP3_PROTO__"
 
 # Lapangan 9 x 6 m (ukuran KidSize/SPL), gawang di x = +-4.5 m.
-# Template: __OP3_PROTO__ diganti path absolut RobotisOp3.proto oleh bringup.launch.py.
+# Template: __OP3_PROTO__, __CAM_W__, __CAM_H__ diisi oleh bringup.launch.py.
 
 WorldInfo {
   info [
@@ -34,8 +34,8 @@ DEF OP3 RobotisOp3 {
   name "op3"
   controller "<extern>"
   supervisor TRUE
-  cameraWidth 640
-  cameraHeight 480
+  cameraWidth __CAM_W__
+  cameraHeight __CAM_H__
   bodySlot [
     InertialUnit {
     }
