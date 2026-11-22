@@ -25,7 +25,7 @@ Isinya:
 ```bash
 sudo apt install ros-jazzy-webots-ros2-driver ros-jazzy-dynamixel-sdk
 mkdir -p ~/aroc_sim_ws/src && cd ~/aroc_sim_ws/src
-for r in ROBOTIS-OP3 ROBOTIS-OP3-msgs ROBOTIS-OP3-Simulations ROBOTIS-Framework ROBOTIS-Framework-msgs ROBOTIS-Math; do
+for r in ROBOTIS-OP3 ROBOTIS-OP3-msgs ROBOTIS-OP3-Simulations ROBOTIS-OP3-Common ROBOTIS-Framework ROBOTIS-Framework-msgs ROBOTIS-Math; do
   git clone --depth 1 -b jazzy-devel https://github.com/ROBOTIS-GIT/$r.git
 done
 git clone https://github.com/afifidf/op3-krsbi-sim.git aroc_sim_bridge
@@ -120,34 +120,64 @@ Jika NumPy 2.x terpasang di `~/.local`, `cv_bridge` dan `torch` dari sistem bisa
 Launch di atas mendahulukan `/usr/lib/python3/dist-packages` untuk node vision. Kalau
 menjalankan `GoNasional vision` sendiri, set `PYTHONPATH` yang sama.
 
-## Dataset bola berlabel otomatis
+## Dataset YOLO berlabel otomatis (bola + landmark)
 
 Model YOLO yang dilatih dengan foto asli hampir tidak mendeteksi bola render Webots.
 `dataset_gen` membuat dataset YOLO dari simulasi dengan label dari ground truth, untuk
 digabung dengan dataset asli saat melatih ulang:
 
 ```bash
-ros2 run aroc_sim_bridge dataset_gen --out ~/datasets/bola_sim --count 2000 --seed 1
+ros2 run aroc_sim_bridge dataset_gen --out ~/datasets/sim_multi --count 5000 --seed 1
 ```
 
+Kelas (urutannya tetap, sama dengan jenis landmark lokalisasi GoNasional):
+
+| id | kelas | objek di simulasi |
+|----|-------|-------------------|
+| 0 | `bola` | bola |
+| 1 | `tiang_gawang` | tiang gawang (silinder, tanpa mistar) |
+| 2 | `titik_penalti` | tanda penalti, 1.3 m dari garis gawang |
+| 3 | `titik_tengah` | tanda tengah lapangan |
+| 4 | `sudut_lapangan` | pertemuan garis di sudut lapangan |
+
+`main_vision` hanya memakai deteksi bernama `bola`, jadi model 5 kelas bisa langsung dipakai.
+`--no-landmarks` untuk label bola saja.
+
 `dataset_gen` menjalankan Webots sendiri (world `dataset_field.wbt`, tanpa window, sekitar
-50 gambar/detik) dan tidak butuh `bringup`. Tiap gambar mengacak posisi, tinggi, arah,
+40 gambar/detik) dan tidak butuh `bringup`. Tiap gambar mengacak posisi, tinggi, arah,
 dan tilt kamera, posisi dan rotasi bola, arah dan intensitas cahaya, serta noise kamera.
 Latar diganti tiap `--relight-every` gambar (default 500; lambat karena teksturnya diunduh
 lalu di-cache). Sekitar 10% gambar tanpa bola (`--neg-ratio`).
 
 - Gambar JPG 450×337, dimampatkan dari kamera 16:9 seperti `main_vision` di robot
   (`--no-squash` untuk 640×360).
-- Kotak dari siluet bola yang diproyeksikan dan dipotong di tepi gambar. Bola yang
-  terlihat kurang dari 40% (`--min-visible`) atau lebih kecil dari 4 px (`--min-px`)
-  tidak dipakai.
-- `--class-id` mengikuti indeks kelas bola di dataset tim, misalnya `2` untuk dataset
-  dengan kelas `GK, Robot, bola`. Kalau digabung, `data.yaml` diambil dari dataset tim.
+- Kotak = titik 3D objek yang diproyeksikan (permukaan bola, silinder tiang, kotak tetap di
+  lantai untuk tanda garis), dipotong di tepi gambar. Objek yang terlihat kurang dari 40%
+  (`--min-visible`) atau lebih kecil dari 4 px (`--min-px`) tidak dilabel.
+- Oklusi tidak dihitung: tanda di belakang bola atau tiang di balik jaring tetap dilabel.
+- Kamera diarahkan ke sekitar bola, jadi landmark lebih jarang muncul (sampel 300 gambar:
+  bola 277, tiang 84, penalti 38, tengah 30, sudut 28).
 - `--seed` berbeda menghasilkan gambar berbeda dengan nama file berbeda, jadi beberapa
   run bisa digabung dalam satu folder.
 
 Belum ada robot lain atau penghalang di gambar, jadi dataset ini melengkapi dataset asli,
 bukan menggantikannya.
+
+### Melatih
+
+`training/merge_datasets.py` menggabungkan dataset simulasi dan dataset tim sambil
+memetakan indeks kelas (kelas yang tidak dipetakan dibuang):
+
+```bash
+python3 training/merge_datasets.py --out ~/datasets/gabungan \
+    --src ~/datasets/sim_multi --src ~/datasets/gkeep_sementara:2=0
+```
+
+`training/train_yolo.ipynb` untuk Colab atau Kaggle (GPU): gabung dataset, latih
+`yolo11n` di `imgsz` 480, tampilkan mAP per kelas, lalu ekspor OpenVINO. Folder
+`*_openvino_model` disalin ke `GoNasional/model/`, dan `main_vision` dijalankan dengan
+`-p imgsz:=480`. Di simulasi: `bringup.launch.py vision:=yolo model:=<folder>`, lalu ukur
+dengan `vision_eval`.
 
 ## Catatan
 

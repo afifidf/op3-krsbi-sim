@@ -1,5 +1,5 @@
 """
-Generator dataset YOLO untuk bola, dengan label otomatis dari ground truth Webots.
+Generator dataset YOLO (bola dan landmark lapangan) dengan label otomatis dari ground truth Webots.
 
 Menjalankan Webots sendiri (world dataset_field.wbt, mode fast, tanpa window) lalu
 bertindak sebagai supervisor "dataset_camera". Tiap sampel mengacak:
@@ -10,17 +10,23 @@ bertindak sebagai supervisor "dataset_camera". Tiap sampel mengacak:
     dibangun ulang dan tekstur diunduh sekali lalu di-cache Webots)
 Sebagian sampel (--neg-ratio) tanpa bola di gambar, label kosong.
 
+Kelas (urutan tetap, sama dengan jenis landmark lokalisasi GoNasional core/field_model.py):
+  0 bola, 1 tiang_gawang, 2 titik_penalti, 3 titik_tengah, 4 sudut_lapangan
+Geometri landmark mengikuti RobotstadiumSoccerField: lapangan 9 x 6 m, tiang di
+(+-4.55, +-0.8) tinggi 0.85 m, titik penalti 1.3 m dari garis gawang.
+
 Gambar disimpan 450x337 (dimampatkan dari 640x360, sama seperti main_vision
 memperlakukan C920 1280x720) kecuali --no-squash. Label YOLO dinormalisasi, jadi
-tidak berubah oleh resize. Bounding box dihitung dari siluet bola (titik-titik
-di permukaan bola diproyeksikan), dipotong di tepi gambar.
+tidak berubah oleh resize. Bounding box = titik-titik 3D objek (permukaan bola,
+silinder tiang, kotak berukuran tetap di lantai untuk tanda garis) diproyeksikan,
+lalu dipotong di tepi gambar. Objek yang terlihat < --min-visible atau lebih kecil
+dari --min-px tidak dilabel.
 
 Pakai (ROS 2 sudah di-source):
     ros2 run aroc_sim_bridge dataset_gen --out ~/datasets/bola_sim --count 2000
 
-Hasil: <out>/images/{train,val}, <out>/labels/{train,val}, <out>/data.yaml (kelas 0 = bola).
-Untuk digabung ke dataset tim yang indeks kelas bolanya bukan 0 (mis. gkeep_sementara:
-0 GK, 1 Robot, 2 bola), pakai --class-id 2; data.yaml tetap harus diambil dari dataset tim.
+Hasil: <out>/images/{train,val}, <out>/labels/{train,val}, <out>/data.yaml.
+Untuk digabung ke dataset tim, indeks kelas label tim perlu dipetakan ke daftar di atas.
 """
 
 import argparse
@@ -36,6 +42,12 @@ BALL_RADIUS = 0.07          # RobocupSoccerBall size 1
 CAM_FOV = 1.3613            # rad, horizontal; sama dengan Camera di RobotisOp3.proto
 CAM_W, CAM_H = 640, 360
 OUT_W, OUT_H = 450, 337     # frame yang dipakai main_vision
+CLASSES = ['bola', 'tiang_gawang', 'titik_penalti', 'titik_tengah', 'sudut_lapangan']
+GOAL_X, POST_Y, POST_RADIUS, POST_HEIGHT = 4.55, 0.8, 0.05, 0.85
+PENALTY_X = 4.5 - 1.3
+FIELD_HALF_LENGTH, FIELD_HALF_WIDTH = 4.5, 3.0
+MARK_HALF = 0.10            # tanda penalti dan tengah (silang kecil)
+CORNER_HALF = 0.15          # sudut lapangan (pertemuan dua garis)
 TEXTURES = [
     'stadium', 'stadium_dry', 'noon_sunny_empty', 'noon_cloudy_empty',
     'noon_building_overcast', 'morning_cloudy_empty', 'dawn_cloudy_empty',
@@ -86,6 +98,28 @@ def _axis_angle(m):
     return [a / norm for a in axis] + [angle]
 
 
+def _ground_square(x, y, half):
+    return [(x + dx, y + dy, 0.0) for dx in (-half, half) for dy in (-half, half)]
+
+
+def _cylinder(x, y, radius, height, n=12):
+    return [(x + radius * math.cos(2 * math.pi * k / n), y + radius * math.sin(2 * math.pi * k / n), z)
+            for k in range(n) for z in (0.0, height)]
+
+
+def _landmarks():
+    """[(class_id, titik 3D)] semua landmark statis di lapangan."""
+    out = []
+    for sx in (1, -1):
+        for sy in (1, -1):
+            out.append((1, _cylinder(sx * GOAL_X, sy * POST_Y, POST_RADIUS, POST_HEIGHT)))
+            out.append((4, _ground_square(sx * FIELD_HALF_LENGTH, sy * FIELD_HALF_WIDTH,
+                                          CORNER_HALF)))
+        out.append((2, _ground_square(sx * PENALTY_X, 0.0, MARK_HALF)))
+    out.append((3, _ground_square(0.0, 0.0, MARK_HALF)))
+    return out
+
+
 def _sphere_points(n=200):
     """Titik Fibonacci di permukaan bola satuan, untuk menghitung siluet."""
     golden = math.pi * (3.0 - math.sqrt(5.0))
@@ -112,6 +146,7 @@ class DatasetGen:
         self.sun = sup.getFromDef('SUN')
         self.focal = (CAM_W / 2.0) / math.tan(CAM_FOV / 2.0)
         self.sphere = _sphere_points()
+        self.landmarks = _landmarks()
 
     # --- acak scene -------------------------------------------------------
 
@@ -185,17 +220,32 @@ class DatasetGen:
     # --- label ------------------------------------------------------------
 
     def bbox(self, cam_pos, rot):
-        """Bounding box ternormalisasi (cx, cy, w, h) atau None kalau tidak layak dilabel."""
+        """Kotak bola ternormalisasi (cx, cy, w, h), 'outside', atau None (tidak layak)."""
         ball = self.ball.getPosition()
-        rel = [ball[i] - cam_pos[i] for i in range(3)]
-        if sum(rot[j][0] * rel[j] for j in range(3)) < -BALL_RADIUS:
-            return 'outside'  # seluruh bola di belakang kamera
+        return self.project_box([[ball[i] + BALL_RADIUS * p[i] for i in range(3)]
+                                 for p in self.sphere], cam_pos, rot)
+
+    def landmark_boxes(self, cam_pos, rot):
+        """[(class_id, kotak)] landmark yang layak dilabel di gambar ini."""
+        out = []
+        for class_id, points in self.landmarks:
+            box = self.project_box(points, cam_pos, rot)
+            if box not in (None, 'outside'):
+                out.append((class_id, box))
+        return out
+
+    def project_box(self, points, cam_pos, rot):
+        """Kotak ternormalisasi dari titik 3D objek; 'outside' bila seluruhnya tak terlihat."""
+        local = []
+        for pt in points:
+            rel = [pt[i] - cam_pos[i] for i in range(3)]
+            local.append([sum(rot[j][i] * rel[j] for j in range(3)) for i in range(3)])
+        if all(x <= 0.02 for x, _, _ in local):
+            return 'outside'  # seluruh objek di belakang kamera
         us, vs = [], []
-        for p in self.sphere:
-            world = [rel[i] + BALL_RADIUS * p[i] for i in range(3)]
-            x, y, z = (sum(rot[j][i] * world[j] for j in range(3)) for i in range(3))
+        for x, y, z in local:
             if x <= 0.02:
-                return None
+                return None   # sebagian di belakang kamera: proyeksi tidak valid
             us.append(CAM_W / 2.0 - self.focal * y / x)
             vs.append(CAM_H / 2.0 - self.focal * z / x)
         x1, x2, y1, y2 = min(us), max(us), min(vs), max(vs)
@@ -222,15 +272,14 @@ class DatasetGen:
         return img
 
 
-def _write_data_yaml(out, class_id):
-    names = ''.join(f'  {i}: {"bola" if i == class_id else f"kelas_{i}"}\n'
-                    for i in range(class_id + 1))
+def _write_data_yaml(out):
+    names = ''.join(f'  {i}: {name}\n' for i, name in enumerate(CLASSES))
     with open(os.path.join(out, 'data.yaml'), 'w') as f:
         f.write(f'path: {out}\ntrain: images/train\nval: images/val\nnames:\n{names}')
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generator dataset bola YOLO dari Webots.')
+    parser = argparse.ArgumentParser(description='Generator dataset YOLO bola + landmark dari Webots.')
     parser.add_argument('--out', required=True, help='folder output dataset')
     parser.add_argument('--count', type=int, default=1000, help='jumlah gambar')
     parser.add_argument('--seed', type=int, default=0)
@@ -250,8 +299,8 @@ def main():
     parser.add_argument('--noise-max', type=float, default=0.03)
     parser.add_argument('--no-squash', dest='squash', action='store_false',
                         help='simpan 640x360 tanpa dimampatkan ke 450x337')
-    parser.add_argument('--class-id', type=int, default=0,
-                        help='indeks kelas bola di label (sesuaikan dengan dataset tim)')
+    parser.add_argument('--no-landmarks', dest='landmarks', action='store_false',
+                        help='hanya label bola (kelas 0)')
     parser.add_argument('--port', type=int, default=1235)
     parser.add_argument('--no-launch', action='store_true',
                         help='jangan jalankan Webots (sudah dibuka manual di --port)')
@@ -285,6 +334,7 @@ def main():
         gen = DatasetGen(sup, rng, args)
         val_every = max(1, round(1.0 / args.val_ratio)) if args.val_ratio > 0 else 0
         stats = {'bola': 0, 'kosong': 0, 'ulang': 0}
+        per_class = [0] * len(CLASSES)
         start = time.monotonic()
         i = 0
         while i < args.count:
@@ -305,19 +355,23 @@ def main():
             name = f'sim_{args.seed}_{i:06d}'
             cv2.imwrite(os.path.join(out, 'images', split, name + '.jpg'), gen.grab(),
                         [cv2.IMWRITE_JPEG_QUALITY, 95])
+            labels = [] if box == 'outside' else [(0, box)]
+            if args.landmarks:
+                labels += gen.landmark_boxes(cam_pos, rot)
             with open(os.path.join(out, 'labels', split, name + '.txt'), 'w') as f:
-                if box != 'outside':
-                    f.write('{} {:.6f} {:.6f} {:.6f} {:.6f}\n'.format(args.class_id, *box))
-                    stats['bola'] += 1
-                else:
-                    stats['kosong'] += 1
+                for class_id, b in labels:
+                    f.write('{} {:.6f} {:.6f} {:.6f} {:.6f}\n'.format(class_id, *b))
+                    per_class[class_id] += 1
+            stats['bola' if box != 'outside' else 'kosong'] += 1
             i += 1
             if i % 100 == 0 or i == args.count:
                 rate = i / (time.monotonic() - start)
                 print(f'{i}/{args.count} gambar ({rate:.1f}/s)', flush=True)
-        _write_data_yaml(out, args.class_id)
+        _write_data_yaml(out)
         print(f"Selesai: {stats['bola']} dengan bola, {stats['kosong']} tanpa bola, "
               f"{stats['ulang']} percobaan diulang. data.yaml di {out}", flush=True)
+        print('Label per kelas: ' + ', '.join(
+            f'{name} {count}' for name, count in zip(CLASSES, per_class)), flush=True)
         done = True
     finally:
         if webots and sup is not None:
