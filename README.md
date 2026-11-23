@@ -209,8 +209,13 @@ ros2 run aroc_sim_bridge loc_bench --mode offset   # estimasi awal digeser 0.6 m
 ros2 run aroc_sim_bridge loc_bench --mode kidnap   # robot dipindah diam-diam
 ```
 
-Hasil di laptop (model `sim_multi`): offset, median error 4 cm; kidnap, 5 dari 6 pose pulih
-dalam 9–40 s. Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya
+Hasil di laptop:
+- Model `sim_multi`: offset median error 4 cm; kidnap, 5 dari 6 pose pulih dalam 9–40 s.
+- Model `sim_robot` (6 kelas): offset median 9 cm; kidnap `--dwell 120`, 6 dari 6 pulih
+  dalam 0–45 s, error median 9 cm. Sim berjalan 0.25x karena YOLO, jadi dwell diperpanjang.
+  Model ini juga tidak lagi melihat kaki robot sendiri sebagai bola.
+
+ Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya
 turun ke UNCERTAIN setelah 15 s tanpa landmark.
 
 ## Tiga robot satu tim (team play)
