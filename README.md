@@ -130,7 +130,7 @@ digabung dengan dataset asli saat melatih ulang:
 ros2 run aroc_sim_bridge dataset_gen --out ~/datasets/sim_multi --count 5000 --seed 1
 ```
 
-Kelas (urutannya tetap, sama dengan jenis landmark lokalisasi GoNasional):
+Kelas (urutannya tetap; 1–4 sama dengan jenis landmark lokalisasi GoNasional):
 
 | id | kelas | objek di simulasi |
 |----|-------|-------------------|
@@ -139,12 +139,20 @@ Kelas (urutannya tetap, sama dengan jenis landmark lokalisasi GoNasional):
 | 2 | `titik_penalti` | tanda penalti, 1.3 m dari garis gawang |
 | 3 | `titik_tengah` | tanda tengah lapangan |
 | 4 | `sudut_lapangan` | pertemuan garis di sudut lapangan |
+| 5 | `robot` | robot OP3 lain, berdiri atau jatuh |
 
 `main_vision` hanya memakai deteksi bernama `bola`, jadi model 5 kelas bisa langsung dipakai.
 `--no-landmarks` untuk label bola saja.
 
-`dataset_gen` menjalankan Webots sendiri (world `dataset_field.wbt`, tanpa window, sekitar
-40 gambar/detik) dan tidak butuh `bringup`. Tiap gambar mengacak posisi, tinggi, arah,
+`dataset_gen` menjalankan Webots sendiri (world `dataset_field.wbt.in`, tanpa window, sekitar
+3–4 gambar/detik karena fisika robot) dan tidak butuh `bringup`.
+
+Empat robot OP3 ikut diacak. Tiap robot digerakkan controller kecil (`distractor_pose`)
+yang memasang pose acak di sekitar pose siap jalan. Di sekitar 50% gambar ada robot lain
+(`--robot-ratio`), berdiri atau jatuh, dan dilabel `robot`. Di sekitar 30% gambar
+(`--self-ratio`), kamera dipasang tepat di posisi kamera kepala sebuah robot, sehingga saat
+menunduk terlihat bahu, lengan, dan kaki robot sendiri (tidak dilabel). Tanpa contoh ini,
+model lama menganggap kaki dan lengan robot sebagai bola dengan confidence sampai 0.95. Tiap gambar mengacak posisi, tinggi, arah,
 dan tilt kamera, posisi dan rotasi bola, arah dan intensitas cahaya, serta noise kamera.
 Latar diganti tiap `--relight-every` gambar (default 500; lambat karena teksturnya diunduh
 lalu di-cache). Sekitar 10% gambar tanpa bola (`--neg-ratio`).
@@ -160,8 +168,7 @@ lalu di-cache). Sekitar 10% gambar tanpa bola (`--neg-ratio`).
 - `--seed` berbeda menghasilkan gambar berbeda dengan nama file berbeda, jadi beberapa
   run bisa digabung dalam satu folder.
 
-Belum ada robot lain atau penghalang di gambar, jadi dataset ini melengkapi dataset asli,
-bukan menggantikannya.
+Dataset ini melengkapi foto asli dari kamera robot, bukan menggantikannya.
 
 ### Melatih
 
@@ -178,6 +185,31 @@ python3 training/merge_datasets.py --out ~/datasets/gabungan \
 `*_openvino_model` disalin ke `GoNasional/model/`, dan `main_vision` dijalankan dengan
 `-p imgsz:=480`. Di simulasi: `bringup.launch.py vision:=yolo model:=<folder>`, lalu ukur
 dengan `vision_eval`.
+
+## Lokalisasi dengan kamera
+
+Dengan model YOLO yang mengenali landmark, lokalisasi GoNasional memakai tiang gawang,
+titik penalti, titik tengah, dan sudut lapangan dari kamera, bukan ground truth:
+
+```bash
+ros2 launch aroc_sim_bridge bringup.launch.py gui:=false vision:=yolo model:=<folder_model>
+ros2 launch GoNasional aroc_soccer.launch.py sim:=true referee:=false landmarks:=vision
+```
+
+`vision_fps` (default 8) membatasi FPS YOLO supaya Webots tidak ikut melambat.
+
+`loc_bench` mengukur error lokalisasi terhadap ground truth. Robot dipindah ke 6 pose
+(`/aroc_sim/place_robot`, robot tetap berdiri), lalu kepala scan:
+
+```bash
+ros2 launch GoNasional aroc_soccer.launch.py sim:=true referee:=false landmarks:=vision behavior:=false
+ros2 run aroc_sim_bridge loc_bench --mode offset   # estimasi awal digeser 0.6 m
+ros2 run aroc_sim_bridge loc_bench --mode kidnap   # robot dipindah diam-diam
+```
+
+Hasil di laptop (model `sim_multi`): offset, median error 4 cm; kidnap, 5 dari 6 pose pulih
+dalam 9–40 s. Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya
+turun ke UNCERTAIN setelah 15 s tanpa landmark.
 
 ## Catatan
 
