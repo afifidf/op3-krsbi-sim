@@ -215,8 +215,8 @@ Hasil di laptop:
   dalam 0–45 s, error median 9 cm. Sim berjalan 0.25x karena YOLO, jadi dwell diperpanjang.
   Model ini juga tidak lagi melihat kaki robot sendiri sebagai bola.
 
- Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya
-turun ke UNCERTAIN setelah 15 s tanpa landmark.
+Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya turun ke
+UNCERTAIN setelah 15 s tanpa landmark.
 
 ## Tiga robot satu tim (team play)
 
