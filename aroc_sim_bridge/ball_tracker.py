@@ -28,6 +28,8 @@ Proyeksi di sini meniru itu: piksel dihitung di resolusi kamera Webots
 Subscribe (untuk skenario tes, lihat juga CLI place_ball):
   - /aroc_sim/place_ball          (geometry_msgs/Point) pindahkan bola ke x,y lapangan
   - /aroc_sim/place_ball_relative (geometry_msgs/Point) pindahkan bola ke x maju, y kiri
+  - /aroc_sim/place_robot         (geometry_msgs/Pose2D) pindahkan robot ke x,y,theta lapangan
+                                  (tinggi badan tetap; untuk tes lokalisasi dan "kidnap")
                                   relatif badan robot saat ini
 
 Posisi kamera dibaca dari node CAM_REF di headSlot OP3 (lihat
@@ -43,12 +45,29 @@ import time
 
 import rclpy
 from controller import Supervisor
-from geometry_msgs.msg import Point, PointStamped, PoseStamped
+from geometry_msgs.msg import Point, PointStamped, Pose2D, PoseStamped
 from std_msgs.msg import Float32, String
 
 IMG_WIDTH = 450
 IMG_HEIGHT = 337
 CAMERA_FOV = 1.3613  # rad, fieldOfView (horizontal) Camera di RobotisOp3.proto
+
+
+def _axis_angle(m):
+    """Matriks rotasi 3x3 -> [ax, ay, az, sudut] untuk field rotation Webots."""
+    angle = math.acos(max(-1.0, min(1.0, (m[0][0] + m[1][1] + m[2][2] - 1.0) / 2.0)))
+    if angle < 1e-9:
+        return [0.0, 0.0, 1.0, 0.0]
+    if math.pi - angle < 1e-6:
+        # 180 derajat: sumbu dari diagonal.
+        ax = [math.sqrt(max(0.0, (m[i][i] + 1.0) / 2.0)) for i in range(3)]
+        k = max(range(3), key=lambda i: ax[i])
+        for i in range(3):
+            if i != k and m[k][i] < 0.0:
+                ax[i] = -ax[i]
+        return ax + [angle]
+    s = 2.0 * math.sin(angle)
+    return [(m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, angle]
 
 
 def _to_local(rot, vec):
@@ -104,6 +123,8 @@ class BallTracker:
         node.create_subscription(Point, '/aroc_sim/place_ball', self._on_place_field, 10)
         node.create_subscription(
             Point, '/aroc_sim/place_ball_relative', self._on_place_relative, 10)
+        self.pending_robot = None
+        node.create_subscription(Pose2D, '/aroc_sim/place_robot', self._on_place_robot, 10)
 
         self.last_seen = None
         self.lost_reported = True
@@ -115,6 +136,27 @@ class BallTracker:
 
     def _on_place_relative(self, msg):
         self.pending_place = ('relative', msg.x, msg.y)
+
+    def _on_place_robot(self, msg):
+        self.pending_robot = (msg.x, msg.y, msg.theta)
+
+    def _apply_place_robot(self):
+        x, y, theta = self.pending_robot
+        self.pending_robot = None
+        z = self.op3.getPosition()[2]
+        # Putar hanya yaw; roll/pitch badan saat berdiri dipertahankan. Rotasi yang
+        # dipaksa tegak sempurna membuat telapak kaki miring dan robot jatuh.
+        rot = self.op3.getOrientation()          # matriks 3x3 baris-mayor
+        dyaw = theta - math.atan2(rot[3], rot[0])
+        c, s_ = math.cos(dyaw), math.sin(dyaw)
+        new = [[c * rot[0 + j] - s_ * rot[3 + j] for j in range(3)],
+               [s_ * rot[0 + j] + c * rot[3 + j] for j in range(3)],
+               [rot[6 + j] for j in range(3)]]
+        self.op3.getField('translation').setSFVec3f([x, y, z])
+        self.op3.getField('rotation').setSFRotation(_axis_angle(new))
+        self.op3.resetPhysics()
+        self.node.get_logger().info(
+            f'Robot dipindah ke x={x:.2f} y={y:.2f} theta={math.degrees(theta):.0f} deg')
 
     def _apply_place(self):
         frame, x, y = self.pending_place
@@ -166,6 +208,8 @@ class BallTracker:
     def update(self):
         if self.pending_place is not None:
             self._apply_place()
+        if self.pending_robot is not None:
+            self._apply_place_robot()
 
         now = self.sup.getTime()
         self._report_rtf(now)

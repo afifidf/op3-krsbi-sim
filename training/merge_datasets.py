@@ -15,7 +15,7 @@ import argparse
 import os
 import shutil
 
-CLASSES = ['bola', 'tiang_gawang', 'titik_penalti', 'titik_tengah', 'sudut_lapangan']
+CLASSES = ['bola', 'tiang_gawang', 'titik_penalti', 'titik_tengah', 'sudut_lapangan', 'robot']
 IMAGE_EXT = ('.jpg', '.jpeg', '.png', '.bmp')
 
 

@@ -10,8 +10,13 @@ bertindak sebagai supervisor "dataset_camera". Tiap sampel mengacak:
     dibangun ulang dan tekstur diunduh sekali lalu di-cache Webots)
 Sebagian sampel (--neg-ratio) tanpa bola di gambar, label kosong.
 
-Kelas (urutan tetap, sama dengan jenis landmark lokalisasi GoNasional core/field_model.py):
-  0 bola, 1 tiang_gawang, 2 titik_penalti, 3 titik_tengah, 4 sudut_lapangan
+Kelas (urutan tetap; 1-4 sama dengan jenis landmark lokalisasi GoNasional core/field_model.py):
+  0 bola, 1 tiang_gawang, 2 titik_penalti, 3 titik_tengah, 4 sudut_lapangan, 5 robot
+
+Robot OP3 (tanpa controller) ikut diacak: robot lain di lapangan, berdiri atau jatuh
+(dilabel `robot`), dan badan robot sendiri tepat di bawah/belakang kamera seperti
+saat kepala menunduk (tidak dilabel). Tanpa contoh ini model menganggap kaki dan
+lengan robot sebagai bola.
 Geometri landmark mengikuti RobotstadiumSoccerField: lapangan 9 x 6 m, tiang di
 (+-4.55, +-0.8) tinggi 0.85 m, titik penalti 1.3 m dari garis gawang.
 
@@ -37,12 +42,18 @@ import subprocess
 import sys
 import time
 
-WORLD_NAME = 'dataset_field.wbt'
+WORLD_NAME = 'dataset_field.wbt.in'
 BALL_RADIUS = 0.07          # RobocupSoccerBall size 1
 CAM_FOV = 1.3613            # rad, horizontal; sama dengan Camera di RobotisOp3.proto
 CAM_W, CAM_H = 640, 360
 OUT_W, OUT_H = 450, 337     # frame yang dipakai main_vision
-CLASSES = ['bola', 'tiang_gawang', 'titik_penalti', 'titik_tengah', 'sudut_lapangan']
+CLASSES = ['bola', 'tiang_gawang', 'titik_penalti', 'titik_tengah', 'sudut_lapangan', 'robot']
+ROBOT_DEFS = ['R0', 'R1', 'R2', 'R3']
+ROBOT_STAND_Z = 0.25        # tinggi titik asal RobotisOp3 dengan lutut ditekuk (pose siap jalan)
+# Kamera kepala relatif titik asal robot dalam pose siap jalan (dari TF op3_description).
+HEAD_CAM_OFFSET = (0.05, 0.0, 0.19)
+# Kotak pembatas OP3 berdiri lurus, di frame robot (x depan, y kiri, z atas dari titik asal).
+ROBOT_BOX = [(x, y, z) for x in (-0.09, 0.09) for y in (-0.16, 0.16) for z in (-0.279, 0.235)]
 GOAL_X, POST_Y, POST_RADIUS, POST_HEIGHT = 4.55, 0.8, 0.05, 0.85
 PENALTY_X = 4.5 - 1.3
 FIELD_HALF_LENGTH, FIELD_HALF_WIDTH = 4.5, 3.0
@@ -53,6 +64,20 @@ TEXTURES = [
     'noon_building_overcast', 'morning_cloudy_empty', 'dawn_cloudy_empty',
     'entrance_hall', 'empty_office', 'factory', 'music_hall',
 ]
+
+
+def _render_world(template):
+    """Isi path RobotisOp3.proto ke template world, tulis ke file sementara."""
+    import tempfile
+    from ament_index_python.packages import get_package_share_directory
+    proto = os.path.join(get_package_share_directory('op3_webots_ros2'), 'protos',
+                         'RobotisOp3.proto')
+    with open(template) as f:
+        text = f.read().replace('__OP3_PROTO__', proto)
+    out = tempfile.NamedTemporaryFile('w', suffix='_dataset_field.wbt', delete=False)
+    out.write(text)
+    out.close()
+    return out.name
 
 
 def _ensure_env(port):
@@ -147,6 +172,8 @@ class DatasetGen:
         self.focal = (CAM_W / 2.0) / math.tan(CAM_FOV / 2.0)
         self.sphere = _sphere_points()
         self.landmarks = _landmarks()
+        self.robots = [sup.getFromDef(name) for name in ROBOT_DEFS]
+        self.robot_poses = []       # (node, label?) robot lain yang sedang di lapangan
 
     # --- acak scene -------------------------------------------------------
 
@@ -161,10 +188,11 @@ class DatasetGen:
         self.sup.step(self.timestep)
         self.ball = self.sup.getFromDef('BALL')
 
-    def place_camera(self):
+    def place_camera(self, self_body=False):
         a = self.args
-        pos = [self.rng.uniform(-4.5, 4.5), self.rng.uniform(-3.0, 3.0),
-               self.rng.uniform(a.cam_height_min, a.cam_height_max)]
+        height = (ROBOT_STAND_Z + HEAD_CAM_OFFSET[2] + self.rng.uniform(-0.02, 0.02)
+                  if self_body else self.rng.uniform(a.cam_height_min, a.cam_height_max))
+        pos = [self.rng.uniform(-4.5, 4.5), self.rng.uniform(-3.0, 3.0), height]
         rot = _rot_matrix(self.rng.uniform(-math.pi, math.pi),
                           self.rng.uniform(a.tilt_min, a.tilt_max),
                           self.rng.gauss(0.0, 0.04))
@@ -216,6 +244,88 @@ class DatasetGen:
             [a / norm for a in axis] + [self.rng.uniform(0, 2 * math.pi)])
         self.ball.resetPhysics()
         return ball
+
+    def place_robots(self, cam_pos, rot, ball, self_body):
+        """Taruh robot pengganggu (dan badan sendiri bila self_body)."""
+        rng = self.rng
+        self.robot_poses = []
+        used = 0
+        cam_yaw = math.atan2(rot[1][0], rot[0][0])
+        if self_body:
+            # Badan sendiri: kamera tepat di posisi kamera kepala robot ini, sehingga
+            # kamera yang menunduk melihat bahu, lengan, dan kaki seperti di OP3 asli.
+            fx, fz = HEAD_CAM_OFFSET[0], HEAD_CAM_OFFSET[2]
+            node = self.robots[used]
+            used += 1
+            self._set_robot(node, cam_pos[0] - fx * math.cos(cam_yaw),
+                            cam_pos[1] - fx * math.sin(cam_yaw), cam_yaw, upright=True,
+                            z=cam_pos[2] - fz)
+        n_other = rng.choice([0, 0, 1, 1, 2, 3]) if rng.random() < self.args.robot_ratio else 0
+        for _ in range(n_other):
+            if used >= len(self.robots):
+                break
+            for _ in range(20):
+                dist = rng.uniform(0.6, 5.0)
+                bearing = cam_yaw + rng.uniform(-0.9, 0.9)
+                x = cam_pos[0] + dist * math.cos(bearing)
+                y = cam_pos[1] + dist * math.sin(bearing)
+                if abs(x) > 4.8 or abs(y) > 3.3:
+                    continue
+                if ball is not None and math.hypot(x - ball[0], y - ball[1]) < 0.4:
+                    continue
+                if any(math.hypot(x - px, y - py) < 0.5 for _, px, py in self.robot_poses):
+                    continue
+                node = self.robots[used]
+                used += 1
+                self._set_robot(node, x, y, rng.uniform(-math.pi, math.pi),
+                                upright=rng.random() > 0.2)
+                self.robot_poses.append((node, x, y))
+                break
+        for k, node in enumerate(self.robots[used:], start=used):
+            # Parkir di bawah lantai, berjauhan: robot yang saling tumpang tindih
+            # membuat fisika ODE menghitung kontak raksasa dan Webots macet.
+            node.getField('translation').setSFVec3f([3.0 * k - 4.5, 12.0, -3.0])
+            node.resetPhysics()
+        return True
+
+    def _set_robot(self, node, x, y, yaw, upright, z=ROBOT_STAND_Z):
+        if upright:
+            rot = _rot_matrix(yaw, 0.0, 0.0)
+        else:   # jatuh tertelungkup atau telentang
+            rot = _rot_matrix(yaw, self.rng.choice([1.0, -1.0]) * math.pi / 2.0, 0.0)
+            z = 0.10
+        node.getField('translation').setSFVec3f([x, y, z])
+        node.getField('rotation').setSFRotation(_axis_angle(rot))
+        node.resetPhysics()
+
+    def robot_boxes(self, cam_pos, rot):
+        """[(kotak, node)] robot lain yang terlihat (badan sendiri tidak dilabel)."""
+        out = []
+        for node, _, _ in self.robot_poses:
+            pos = node.getPosition()
+            m = node.getOrientation()
+            pts = [[pos[i] + m[3 * i] * bx + m[3 * i + 1] * by + m[3 * i + 2] * bz
+                    for i in range(3)] for bx, by, bz in ROBOT_BOX]
+            box = self.project_box(pts, cam_pos, rot)
+            if box not in (None, 'outside'):
+                out.append((box, node))
+        return out
+
+    def ball_hidden_by_robot(self, cam_pos, ball_box, robots):
+        """True bila robot yang lebih dekat dari bola menutupi sebagian besar kotak bola."""
+        if ball_box in (None, 'outside'):
+            return False
+        ball = self.ball.getPosition()
+        ball_dist = math.dist(cam_pos, ball)
+        bx, by, bw, bh = ball_box
+        for (rx, ry, rw, rh), node in robots:
+            if math.dist(cam_pos, node.getPosition()) > ball_dist:
+                continue
+            ix = max(0.0, min(bx + bw / 2, rx + rw / 2) - max(bx - bw / 2, rx - rw / 2))
+            iy = max(0.0, min(by + bh / 2, ry + rh / 2) - max(by - bh / 2, ry - rh / 2))
+            if ix * iy > 0.3 * bw * bh:
+                return True
+        return False
 
     # --- label ------------------------------------------------------------
 
@@ -301,6 +411,10 @@ def main():
                         help='simpan 640x360 tanpa dimampatkan ke 450x337')
     parser.add_argument('--no-landmarks', dest='landmarks', action='store_false',
                         help='hanya label bola (kelas 0)')
+    parser.add_argument('--robot-ratio', type=float, default=0.5,
+                        help='porsi gambar dengan robot lain di lapangan')
+    parser.add_argument('--self-ratio', type=float, default=0.3,
+                        help='porsi gambar dengan badan robot sendiri di bawah kamera')
     parser.add_argument('--port', type=int, default=1235)
     parser.add_argument('--no-launch', action='store_true',
                         help='jangan jalankan Webots (sudah dibuka manual di --port)')
@@ -315,7 +429,8 @@ def main():
     webots = None
     if not args.no_launch:
         from ament_index_python.packages import get_package_share_directory
-        world = os.path.join(get_package_share_directory('aroc_sim_bridge'), 'worlds', WORLD_NAME)
+        world = _render_world(os.path.join(
+            get_package_share_directory('aroc_sim_bridge'), 'worlds', WORLD_NAME))
         log = open(os.path.join(out, 'webots.log'), 'w')
         webots = subprocess.Popen(
             [os.path.join(os.environ['WEBOTS_HOME'], 'webots'), '--batch', '--mode=fast',
@@ -325,6 +440,14 @@ def main():
 
     import cv2
     from controller import Supervisor
+
+    distractors = []
+    if not args.no_launch:
+        for k in range(len(ROBOT_DEFS)):
+            env = dict(os.environ, WEBOTS_CONTROLLER_URL=f'ipc://{args.port}/distractor_{k}')
+            distractors.append(subprocess.Popen(
+                [sys.executable, '-m', 'aroc_sim_bridge.distractor_pose', str(args.seed * 10 + k)],
+                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
 
     rng = random.Random(args.seed)
     sup = None
@@ -340,15 +463,22 @@ def main():
         while i < args.count:
             if i % args.relight_every == 0:
                 gen.relight()
-            cam_pos, rot = gen.place_camera()
+            self_body = rng.random() < args.self_ratio
+            cam_pos, rot = gen.place_camera(self_body)
             want_ball = rng.random() >= args.neg_ratio
-            if gen.place_ball(cam_pos, rot, want_ball) is None:
+            ball = gen.place_ball(cam_pos, rot, want_ball)
+            if ball is None:
                 stats['ulang'] += 1
                 continue
+            gen.place_robots(cam_pos, rot, ball, self_body)
             sup.step(gen.timestep)
             sup.step(gen.timestep)
             box = gen.bbox(cam_pos, rot)
             if box is None or want_ball != (box != 'outside'):
+                stats['ulang'] += 1
+                continue
+            robots = gen.robot_boxes(cam_pos, rot)
+            if gen.ball_hidden_by_robot(cam_pos, box, robots):
                 stats['ulang'] += 1
                 continue
             split = 'val' if val_every and i % val_every == 0 else 'train'
@@ -358,6 +488,7 @@ def main():
             labels = [] if box == 'outside' else [(0, box)]
             if args.landmarks:
                 labels += gen.landmark_boxes(cam_pos, rot)
+            labels += [(5, b) for b, _ in robots]
             with open(os.path.join(out, 'labels', split, name + '.txt'), 'w') as f:
                 for class_id, b in labels:
                     f.write('{} {:.6f} {:.6f} {:.6f} {:.6f}\n'.format(class_id, *b))
@@ -374,6 +505,8 @@ def main():
             f'{name} {count}' for name, count in zip(CLASSES, per_class)), flush=True)
         done = True
     finally:
+        for proc in distractors:
+            proc.kill()
         if webots and sup is not None:
             sup.simulationQuit(0)  # tutup Webots dengan rapi
         if webots:

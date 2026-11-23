@@ -4,10 +4,13 @@ EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/project
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/robotstadium/protos/RobotstadiumSoccerField.proto"
 EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/RobocupSoccerBall.proto"
+EXTERNPROTO "__OP3_PROTO__"
 
 # World untuk dataset_gen: lapangan 9 x 6 m, satu bola, dan kamera kinematik dengan
 # lensa yang sama seperti kepala OP3 (fieldOfView 1.3613 rad), rasio 16:9 seperti C920.
-# Tidak ada robot OP3 / framework ROBOTIS; supervisor dataset_gen mengatur semuanya.
+# Robot OP3 tanpa controller dipakai sebagai pengganggu (robot lain, dan badan robot
+# sendiri di bawah kamera); supervisor dataset_gen mengatur semuanya.
+# Template: __OP3_PROTO__ diisi dataset_gen (path RobotisOp3.proto dari op3_webots_ros2).
 
 WorldInfo {
   info [
@@ -48,6 +51,39 @@ DEF CAMBOT Robot {
       fieldOfView 1.3613
       width 640
       height 360
+      near 0.06              # kepala robot sendiri (mode badan sendiri) tidak ikut terlihat
     }
   ]
+}
+DEF R0 RobotisOp3 {
+  translation 20 20 -30
+  name "distractor_0"
+  controller "<extern>"
+  synchronization FALSE
+  cameraWidth 1
+  cameraHeight 1
+}
+DEF R1 RobotisOp3 {
+  translation 22 20 -30
+  name "distractor_1"
+  controller "<extern>"
+  synchronization FALSE
+  cameraWidth 1
+  cameraHeight 1
+}
+DEF R2 RobotisOp3 {
+  translation 24 20 -30
+  name "distractor_2"
+  controller "<extern>"
+  synchronization FALSE
+  cameraWidth 1
+  cameraHeight 1
+}
+DEF R3 RobotisOp3 {
+  translation 26 20 -30
+  name "distractor_3"
+  controller "<extern>"
+  synchronization FALSE
+  cameraWidth 1
+  cameraHeight 1
 }

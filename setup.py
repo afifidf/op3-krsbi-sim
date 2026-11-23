@@ -31,6 +31,7 @@ setup(
             'ball_tracker = aroc_sim_bridge.ball_tracker:main',
             'place_ball = aroc_sim_bridge.place_ball:main',
             'vision_eval = aroc_sim_bridge.vision_eval:main',
+            'loc_bench = aroc_sim_bridge.loc_bench:main',
             'dataset_gen = aroc_sim_bridge.dataset_gen:main',
             'field_viewer = aroc_sim_bridge.field_viewer:main',
         ],

@@ -80,6 +80,7 @@ def _launch_setup(context):
     world_name = LaunchConfiguration('world').perform(context)
     vision = LaunchConfiguration('vision').perform(context)
     model = LaunchConfiguration('model').perform(context)
+    vision_fps = float(LaunchConfiguration('vision_fps').perform(context) or 0.0)
     cam_width = LaunchConfiguration('cam_width').perform(context)
     cam_height = LaunchConfiguration('cam_height').perform(context)
     # Di mode gt gambar kamera tidak dipakai siapa pun; kamera kecil membuat
@@ -181,6 +182,7 @@ def _launch_setup(context):
                 'model_path': model,
                 'show_window': False,
                 'imgsz': _model_imgsz(model),
+                'max_fps': vision_fps,
             }],
             remappings=[('/usb_cam_node/image_raw', '/robotis_op3/camera/image_raw')],
             # NumPy 2.x di ~/.local menutupi NumPy 1.x sistem yang dipakai saat
@@ -210,6 +212,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'model', default_value='',
             description='Folder model OpenVINO; dengan vision:=yolo menjalankan GoNasional vision.'),
+        DeclareLaunchArgument(
+            'vision_fps', default_value='8',
+            description='Batas FPS YOLO (0 = tiap frame). YOLO berebut CPU dengan Webots.'),
         DeclareLaunchArgument(
             'cam_width', default_value='',
             description='Kosong: 640 untuk vision:=yolo, 64 untuk vision:=gt.'),
