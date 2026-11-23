@@ -34,6 +34,7 @@ setup(
             'loc_bench = aroc_sim_bridge.loc_bench:main',
             'dataset_gen = aroc_sim_bridge.dataset_gen:main',
             'field_viewer = aroc_sim_bridge.field_viewer:main',
+            'team_monitor = aroc_sim_bridge.team_monitor:main',
         ],
     },
 )

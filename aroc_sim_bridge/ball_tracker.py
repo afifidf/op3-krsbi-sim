@@ -92,6 +92,8 @@ class BallTracker:
         node.declare_parameter('cam_width', 640)
         node.declare_parameter('cam_height', 360)
         node.declare_parameter('publish_obj_detect', True)
+        # DEF name of the robot this tracker serves (team world: OP3_1, OP3_2, ...).
+        node.declare_parameter('robot_def', 'OP3')
         self.publish_period = node.get_parameter('publish_period').value
         self.max_range = node.get_parameter('max_range').value
         self.side_threshold = node.get_parameter('side_threshold').value
@@ -101,9 +103,10 @@ class BallTracker:
         self.publish_obj_detect = node.get_parameter('publish_obj_detect').value
 
         self.ball = supervisor.getFromDef('BALL')
-        self.op3 = supervisor.getFromDef('OP3')
+        robot_def = node.get_parameter('robot_def').value
+        self.op3 = supervisor.getFromDef(robot_def)
         if self.ball is None or self.op3 is None:
-            raise RuntimeError('World harus punya DEF BALL dan DEF OP3')
+            raise RuntimeError(f'World harus punya DEF BALL dan DEF {robot_def}')
         self.cam = self.op3.getField('headSlot').getMFNode(0)
 
         # Fokus dalam piksel kamera Webots (piksel persegi), lalu skala ke 450x337

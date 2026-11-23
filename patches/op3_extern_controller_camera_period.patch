@@ -1,0 +1,38 @@
+diff --git a/op3_webots_ros2/include/op3_webots_ros2/op3_extern_controller.hpp b/op3_webots_ros2/include/op3_webots_ros2/op3_extern_controller.hpp
+index 9ce28c3..bc68aa4 100644
+--- a/op3_webots_ros2/include/op3_webots_ros2/op3_extern_controller.hpp
++++ b/op3_webots_ros2/include/op3_webots_ros2/op3_extern_controller.hpp
+@@ -56,6 +56,7 @@ public:
+ 
+ 
+   int time_step_ms_;
++  int camera_period_ms_ = 0;
+   double time_step_sec_;
+ 
+   double current_time_sec_; // control time
+diff --git a/op3_webots_ros2/src/op3_extern_controller.cpp b/op3_webots_ros2/src/op3_extern_controller.cpp
+index 0637e24..05f3306 100644
+--- a/op3_webots_ros2/src/op3_extern_controller.cpp
++++ b/op3_webots_ros2/src/op3_extern_controller.cpp
+@@ -100,7 +100,11 @@ void OP3ExternController::initialize(std::string gain_file_path)
+   gyro_->enable(time_step_ms_);
+   acc_->enable(time_step_ms_);
+   iu_->enable(time_step_ms_);
+-  camera_->enable(time_step_ms_);
++  // camera_period_ms: render period of the head camera (default every step,
++  // as before). 0 disables it; several robots without vision run much faster.
++  camera_period_ms_ = this->declare_parameter<int>("camera_period_ms", time_step_ms_);
++  if (camera_period_ms_ > 0)
++    camera_->enable(camera_period_ms_);
+   //key_board_->enable(time_step_ms_);
+ 
+   // initialize image_data_ and camera_info
+@@ -276,6 +280,8 @@ void OP3ExternController::publishCOMData()
+ 
+ void OP3ExternController::publishCameraData()
+ {
++  if (camera_period_ms_ <= 0)
++    return;
+   image_data_.header.stamp = this->get_clock()->now();
+   camera_info_msg_.header.stamp = image_data_.header.stamp;
+   

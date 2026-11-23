@@ -29,6 +29,8 @@ for r in ROBOTIS-OP3 ROBOTIS-OP3-msgs ROBOTIS-OP3-Simulations ROBOTIS-OP3-Common
   git clone --depth 1 -b jazzy-devel https://github.com/ROBOTIS-GIT/$r.git
 done
 git clone https://github.com/afifidf/op3-krsbi-sim.git aroc_sim_bridge
+# Opsional, untuk team.launch.py: kamera OP3 bisa dimatikan (3 robot jauh lebih cepat)
+git -C ROBOTIS-OP3-Simulations apply ../aroc_sim_bridge/patches/op3_extern_controller_camera_period.patch
 cd ~/aroc_sim_ws
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
@@ -210,6 +212,30 @@ ros2 run aroc_sim_bridge loc_bench --mode kidnap   # robot dipindah diam-diam
 Hasil di laptop (model `sim_multi`): offset, median error 4 cm; kidnap, 5 dari 6 pose pulih
 dalam 9–40 s. Pose yang tidak melihat landmark sama sekali tidak bisa pulih, dan statusnya
 turun ke UNCERTAIN setelah 15 s tanpa landmark.
+
+## Tiga robot satu tim (team play)
+
+```bash
+ros2 launch aroc_sim_bridge team.launch.py gui:=false     # 3 OP3 + stack GoNasional masing-masing
+ros2 run aroc_sim_bridge team_monitor --duration 360 --csv team.csv
+ROS_DOMAIN_ID=12 ros2 topic echo /behavior/role           # lihat satu robot
+```
+
+Tiap robot jalan di `ROS_DOMAIN_ID` sendiri (11, 12, 13): op3_manager, bridge, dan stack
+GoNasional robot itu tidak saling lihat di ROS. Mereka hanya berbagi info lewat UDP
+`team_comm`, sama seperti robot asli di WiFi. Pemain 1 kiper (`goalie:=0` tanpa kiper),
+bola mulai di (-0.6, 0.4) (`ball:=x,y`), jumlah robot `robots:=1..4`.
+
+Vision memakai ground truth, dan kamera tidak dirender (`camera_period_ms: 0`, perlu patch
+di atas). Tanpa patch, render kamera 3 robot tiap 8 ms membuat simulasi turun ke 0.15x
+waktu nyata. Robot jatuh karena op3_manager memakai jam nyata. Dengan patch: 0.6–0.75x.
+
+Hasil 6 menit di laptop:
+- Peran: pemain 1 kiper 100%, pemain 2 striker 97%, pemain 3 defender 96%
+  (sisanya striker sementara pemain 2 bangun).
+- Dua striker sekaligus 0% dari sampel, tanpa striker 1%.
+- Bola masuk gawang lawan setelah 206 s.
+- Error lokalisasi median 1–6 cm, p90 maksimum 15 cm.
 
 ## Catatan
 

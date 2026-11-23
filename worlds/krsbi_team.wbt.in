@@ -1,0 +1,35 @@
+#VRML_SIM R2025a utf8
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/robotstadium/protos/RobotstadiumSoccerField.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/balls/protos/RobocupSoccerBall.proto"
+EXTERNPROTO "__OP3_PROTO__"
+
+# Lapangan 9 x 6 m (ukuran KidSize/SPL), gawang di x = +-4.5 m.
+# Tiga OP3 satu tim untuk uji team play. Path proto, posisi bola, dan blok
+# RobotisOp3 + ball_tracker per robot diisi oleh team.launch.py.
+
+WorldInfo {
+  info [
+    "Lapangan sepak bola humanoid untuk simulasi OP3 tim AROC."
+  ]
+  title "KRSBI field, 3 OP3"
+  basicTimeStep 8
+  # Tiga robot yang tidak bersentuhan = pulau fisika terpisah, bisa paralel.
+  optimalThreadCount 4
+}
+Viewpoint {
+  orientation -0.38 0.38 0.84 1.75
+  position -2.0 -6.0 5.0
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+RobotstadiumSoccerField {
+}
+DEF BALL RobocupSoccerBall {
+  translation __BALL__ 0.07
+}
+__ROBOTS__
